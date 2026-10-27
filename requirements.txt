@@ -1,0 +1,7 @@
+adafruit-circuitpython-pn532
+brother-ql
+Pillow
+pyserial
+pyusb
+requests
+rpi_ws281x
