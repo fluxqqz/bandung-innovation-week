@@ -45,7 +45,7 @@ API_KEY = os.getenv("API_KEY", "")
 
 SERIAL_PORT = "/dev/ttyACM0"
 # SERIAL_PORT = "/dev/ttyUSB0"
-BAUD_RATE = 115200
+BAUD_RATE = 500000
 
 IMAGE_FILE = Path(__file__).with_name("photo.txt")
 CHUNK = 256
@@ -55,6 +55,9 @@ LED_PIN = 18
 strip = PixelStrip(LED_COUNT, LED_PIN, 800000, 10, False, 100, 0)  # count, pin, freq, DMA, invert, brightness, channel
 strip.begin()
 
+pet_name = "ponytail"
+can_print = "true"
+
 def led_on(color: Color) -> None:
     """Turn on the LED strip with the given color."""
     for i in range(LED_COUNT):
@@ -63,15 +66,21 @@ def led_on(color: Color) -> None:
 
 def call_api(UID: str) -> int:
     """Call the API and print the response."""
+    global pet_name, can_print
+
     URL = BASE_URL + UID
     response = requests.get(URL, auth=(USERNAME_API, API_KEY), timeout=5)
+
     status_response = response.status_code
 
     if response.ok:
         result = response.json()
         print(result)
 
+        can_print = result["data"]["can_print"]
         image_url = result["data"]["image_url"]
+        image_raw_url = result["data"]["raw_image_url"]
+        frame_image_url = result["data"]["frame_image_url"]
         print_image_url = result["data"]["print_image_url"]
 
         def download(url, filename=None):
@@ -83,7 +92,9 @@ def call_api(UID: str) -> int:
             return filename
 
         download(image_url, "photo.png")
-        download(print_image_url, "photo_print.png")
+        download(image_raw_url, "photo_raw.png")
+        download(frame_image_url, "frame_monosnap.png")
+        # download(print_image_url, "photo_print.png")
 
         return status_response
 
@@ -167,6 +178,8 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    global pet_name, can_print
+
     args = parse_args()
     i2c = None
 
@@ -254,7 +267,7 @@ def main() -> int:
 
                 # Convert the photo into photo.txt
                 subprocess.run(
-                    ["python3", "image_to_txt.py", "photo_print.png", "photo.txt",
+                    ["python3", "image_to_txt.py", "photo.png", "photo.txt",
                     "--fit", "crop", "--width", "200", "--height", "200", "--layout", "grid"],
                     check=True
                 )
@@ -264,22 +277,42 @@ def main() -> int:
                 log(f"Sending image data to serial port {SERIAL_PORT}...")
                 send_frame(ser, image_bytes)
 
-                # Print photo using Brother printer
                 try:
-                    # subprocess.run(
-                    #     ["main_venv/bin/python", "test-printer-ql800/ql800.py", "print", "photo_print.png",
-                    #     "--label", "62red", "--dither", "--brightness", "1.2", "--contrast", "1.0"],
-                    #     check=True
-                    # )
-
                     subprocess.run(
-                        ["main_venv/bin/python", "/ql800_auto.py", "print", "photo_print.png",
-                        "--label", "62red", "--dither", "--auto-exposure", "--target-mean", "180"],
+                        ["venv/bin/python", "make_frame.py", "--name", pet_name,
+                        "--photo", "photo_raw.png", "--output", "photo_edited.png",
+                        "--auto-exposure", "--target-mean", "200"],
                         check=True
                     )
 
-                    led_on(Color(0, 255, 0))
-                    log(f"Printing image...")
+                    log(f"Convert image")
+                except subprocess.CalledProcessError as e:
+                    log(f"Convert image failed: {e}")
+                    led_on(Color(255, 0, 0))
+                    time.sleep(1)
+                    continue
+
+                # Print photo using Brother printer
+                try:
+                    if can_print == "true":
+                        subprocess.run(
+                            ["venv/bin/python", "ql800_auto.py", "print", "photo_edited.png",
+                            "--label", "62red", "--dither"],
+                            check=True
+                        )
+
+                        led_on(Color(0, 255, 0))
+                        log(f"Printing image...")
+                    else:
+                        subprocess.run(
+                            ["venv/bin/python", "ql800_auto.py", "print", "photo_edited.png",
+                            "--label", "62red", "--dither"],
+                            check=True
+                        )
+                        
+                        log(f"Printing skipped for tag {format_uid(uid)} because can_print is false.")
+                        led_on(Color(255, 255, 0))
+                        time.sleep(1)
                 except subprocess.CalledProcessError as e:
                     log(f"Printing failed")
                     led_on(Color(255, 0, 0))
